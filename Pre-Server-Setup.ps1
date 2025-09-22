@@ -5,7 +5,7 @@ Prepares a Windows Server for Active Directory, DNS, and DHCP installations.
 - Checks for administrative privileges
 - Optionally configures a static IP address
 - Renames the server (supports Domain Controllers)
-- Sets the time zone with a user-friendly selection
+- Sets the time zone with a user-friendly numbered list
 - Enables remote management
 - Verifies network connectivity
 - Includes error handling and logging
@@ -171,12 +171,15 @@ try {
     # ----------------------------
     Write-Host "`n=== Set Time Zone ===`n"
 
+    # Get all valid time zones
     $timeZones = Get-TimeZone -ListAvailable | Sort-Object Id
 
+    # Display indexed list
     for ($i = 0; $i -lt $timeZones.Count; $i++) {
         Write-Host "$i : $($timeZones[$i].DisplayName)"
     }
 
+    # Prompt user to select
     do {
         $selection = Read-Host "Enter the number corresponding to your time zone"
         if ($selection -match '^\d+$' -and $selection -ge 0 -and $selection -lt $timeZones.Count) {
@@ -188,6 +191,7 @@ try {
         }
     } while ($true)
 
+    # Apply time zone
     try {
         Set-TimeZone -Id $tz -ErrorAction Stop
         Write-Host "Time zone set to $tz."
@@ -213,4 +217,19 @@ try {
             $pingTarget = "8.8.8.8"
         }
 
-        if (
+        if (Test-Connection -ComputerName $pingTarget -Count 2 -Quiet) {
+            Write-Host "$pingTarget is reachable."
+        } else {
+            Write-Warning "Cannot reach $pingTarget. Check network settings."
+        }
+    } catch {
+        Write-Warning "Error testing connectivity: $_"
+    }
+
+} catch {
+    Write-Error "A fatal error occurred: $_"
+} finally {
+    Stop-Transcript
+    Write-Host "`nPre-server setup completed. Reboot the server if prompted (especially after renaming)."
+    Read-Host "Press Enter to exit"
+}
