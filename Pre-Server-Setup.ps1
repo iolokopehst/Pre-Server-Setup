@@ -44,6 +44,24 @@ function ReadMandatory($prompt) {
     return $input
 }
 
+# ----------------------------
+# Function to convert subnet mask to prefix length
+# ----------------------------
+function Convert-SubnetToPrefix($subnet) {
+    switch ($subnet) {
+        '255.0.0.0' { return 8 }
+        '255.255.0.0' { return 16 }
+        '255.255.255.0' { return 24 }
+        '255.255.255.128' { return 25 }
+        '255.255.255.192' { return 26 }
+        '255.255.255.224' { return 27 }
+        '255.255.255.240' { return 28 }
+        '255.255.255.248' { return 29 }
+        '255.255.255.252' { return 30 }
+        default { throw "Unsupported subnet mask: $subnet" }
+    }
+}
+
 try {
     # ----------------------------
     # Configure static IP
@@ -70,9 +88,12 @@ try {
     $Gateway = ReadMandatory "Enter the default gateway (e.g., 192.168.10.1)"
     $DNS = ReadMandatory "Enter the preferred DNS server (usually the server itself or your network DNS)"
 
+    # Convert subnet mask to prefix length
+    $PrefixLength = Convert-SubnetToPrefix $Subnet
+
     # Apply static IP
     Try {
-        New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $IP -PrefixLength (([IPAddress]$Subnet).GetAddressBytes() | % { [Convert]::ToString($_,2).PadLeft(8,'0') } | Measure-Object -Sum).Sum - 24 -DefaultGateway $Gateway -ErrorAction Stop
+        New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $IP -PrefixLength $PrefixLength -DefaultGateway $Gateway -ErrorAction Stop
         Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $DNS -ErrorAction Stop
         Write-Host "Static IP configured successfully."
     } Catch {
