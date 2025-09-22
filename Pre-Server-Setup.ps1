@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-Prepares a fresh Windows Server for Active Directory, DNS, and DHCP installations.
+Prepares a Windows Server for Active Directory, DNS, and DHCP installations.
 .DESCRIPTION
 - Checks for administrative privileges
 - Optionally configures a static IP address
-- Renames the server
+- Renames the server (supports Domain Controllers)
 - Sets the time zone
-- Enables remote management (optional)
+- Enables remote management
 - Verifies network connectivity
 - Includes error handling and logging
 #>
@@ -140,8 +140,31 @@ try {
         }
     } while (-not $newName)
 
-    Rename-Computer -NewName $newName -Force -ErrorAction Stop
-    Write-Host "Server renamed to $newName. A reboot is required to apply the name change."
+    # Check if server is a domain controller
+    $adFeature = Get-WindowsFeature -Name AD-Domain-Services
+    $isDC = $false
+    if ($adFeature.Installed) {
+        try {
+            $adRole = Get-ADDomainController -ErrorAction Stop
+            if ($adRole) { $isDC = $true }
+        } catch { $isDC = $false }
+    }
+
+    if ($isDC) {
+        Write-Host "Server is a Domain Controller. Renaming using netdom..."
+        $OldName = $env:COMPUTERNAME
+        try {
+            netdom computername $OldName /add:$newName
+            netdom computername $OldName /makeprimary:$newName
+            netdom computername $OldName /remove:$OldName
+            Write-Host "DC renamed to $newName. A reboot is required."
+        } catch {
+            Write-Error "Failed to rename DC: $_"
+        }
+    } else {
+        Rename-Computer -NewName $newName -Force -ErrorAction Stop
+        Write-Host "Server renamed to $newName. A reboot is required."
+    }
 
     # ----------------------------
     # Set time zone
