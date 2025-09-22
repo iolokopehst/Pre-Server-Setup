@@ -93,14 +93,20 @@ try {
 
     # Apply static IP
     Try {
-        # Remove existing IPv4 addresses (except loopback)
+        # Disable DHCP on the adapter
+        Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -Dhcp Disabled -ErrorAction Stop
+
+        # Remove any existing IPv4 addresses (except loopback)
         Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 |
             Where-Object {$_.IPAddress -ne "127.0.0.1"} |
-            Remove-NetIPAddress -Confirm:$false -ErrorAction Stop
+            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 
         # Add new static IP
         New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $IP -PrefixLength $PrefixLength -DefaultGateway $Gateway -ErrorAction Stop
+
+        # Set DNS server
         Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $DNS -ErrorAction Stop
+
         Write-Host "Static IP configured successfully."
     } Catch {
         Write-Error "Failed to set static IP: $_"
