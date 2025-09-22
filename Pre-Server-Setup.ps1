@@ -3,7 +3,7 @@
 Prepares a fresh Windows Server for Active Directory, DNS, and DHCP installations.
 .DESCRIPTION
 - Checks for administrative privileges
-- Configures a static IP address
+- Optionally configures a static IP address
 - Renames the server
 - Sets the time zone
 - Enables remote management (optional)
@@ -62,61 +62,84 @@ function Convert-SubnetToPrefix($subnet) {
     }
 }
 
+# ----------------------------
+# Function to validate hostname
+# ----------------------------
+function Validate-ComputerName($name) {
+    if ($name.Length -lt 1 -or $name.Length -gt 63) { return $false }
+    if ($name -match '^[0-9]+$') { return $false } # cannot be all numeric
+    if ($name -match '^-|-$') { return $false }   # cannot start/end with hyphen
+    if ($name -match '[^a-zA-Z0-9-]') { return $false } # invalid chars
+    return $true
+}
+
 try {
     # ----------------------------
-    # Configure static IP
+    # Optional static IP
     # ----------------------------
-    Write-Host "`n=== Configure Static IP ===`n"
+    $setStatic = Read-Host "Do you want to configure a static IP? (Y/N)"
+    if ($setStatic -match '^[Yy]') {
+        Write-Host "`n=== Configure Static IP ===`n"
 
-    # List network adapters
-    $adapters = Get-NetAdapter | Where-Object {$_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Virtual|Loopback'}
-    if ($adapters.Count -eq 0) {
-        throw "No active network adapters found. Please check network connectivity."
-    }
+        # List network adapters
+        $adapters = Get-NetAdapter | Where-Object {$_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Virtual|Loopback'}
+        if ($adapters.Count -eq 0) {
+            throw "No active network adapters found. Please check network connectivity."
+        }
 
-    Write-Host "Active network adapters:"
-    $adapters | ForEach-Object {Write-Host "$($_.InterfaceIndex): $($_.Name) - $($_.InterfaceDescription)"}
+        Write-Host "Active network adapters:"
+        $adapters | ForEach-Object {Write-Host "$($_.InterfaceIndex): $($_.Name) - $($_.InterfaceDescription)"}
 
-    $adapterIndex = ReadMandatory "Enter the InterfaceIndex of the adapter to configure"
+        $adapterIndex = ReadMandatory "Enter the InterfaceIndex of the adapter to configure"
 
-    $adapter = $adapters | Where-Object {$_.InterfaceIndex -eq [int]$adapterIndex}
-    if (-not $adapter) { throw "Invalid adapter selected." }
+        $adapter = $adapters | Where-Object {$_.InterfaceIndex -eq [int]$adapterIndex}
+        if (-not $adapter) { throw "Invalid adapter selected." }
 
-    # Prompt for IP configuration
-    $IP = ReadMandatory "Enter the static IPv4 address (e.g., 192.168.10.10)"
-    $Subnet = ReadMandatory "Enter the subnet mask (e.g., 255.255.255.0)"
-    $Gateway = ReadMandatory "Enter the default gateway (e.g., 192.168.10.1)"
-    $DNS = ReadMandatory "Enter the preferred DNS server (usually the server itself or your network DNS)"
+        # Prompt for IP configuration
+        $IP = ReadMandatory "Enter the static IPv4 address (e.g., 192.168.10.10)"
+        $Subnet = ReadMandatory "Enter the subnet mask (e.g., 255.255.255.0)"
+        $Gateway = ReadMandatory "Enter the default gateway (e.g., 192.168.10.1)"
+        $DNS = ReadMandatory "Enter the preferred DNS server (usually the server itself or your network DNS)"
 
-    # Convert subnet mask to prefix length
-    $PrefixLength = Convert-SubnetToPrefix $Subnet
+        # Convert subnet mask to prefix length
+        $PrefixLength = Convert-SubnetToPrefix $Subnet
 
-    # Apply static IP
-    Try {
-        # Disable DHCP on the adapter
-        Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -Dhcp Disabled -ErrorAction Stop
+        # Apply static IP
+        Try {
+            # Disable DHCP on the adapter
+            Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -Dhcp Disabled -ErrorAction Stop
 
-        # Remove any existing IPv4 addresses (except loopback)
-        Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 |
-            Where-Object {$_.IPAddress -ne "127.0.0.1"} |
-            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+            # Remove any existing IPv4 addresses (except loopback)
+            Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 |
+                Where-Object {$_.IPAddress -ne "127.0.0.1"} |
+                Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 
-        # Add new static IP
-        New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $IP -PrefixLength $PrefixLength -DefaultGateway $Gateway -ErrorAction Stop
+            # Add new static IP
+            New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $IP -PrefixLength $PrefixLength -DefaultGateway $Gateway -ErrorAction Stop
 
-        # Set DNS server
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $DNS -ErrorAction Stop
+            # Set DNS server
+            Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $DNS -ErrorAction Stop
 
-        Write-Host "Static IP configured successfully."
-    } Catch {
-        Write-Error "Failed to set static IP: $_"
+            Write-Host "Static IP configured successfully."
+        } Catch {
+            Write-Error "Failed to set static IP: $_"
+        }
+    } else {
+        Write-Host "Skipping static IP configuration."
     }
 
     # ----------------------------
     # Rename server
     # ----------------------------
     Write-Host "`n=== Rename Server ===`n"
-    $newName = ReadMandatory "Enter the new hostname for this server"
+    do {
+        $newName = ReadMandatory "Enter the new hostname for this server"
+        if (-not (Validate-ComputerName $newName)) {
+            Write-Host "Invalid hostname. Must be 1-63 characters, letters/numbers/hyphens only, cannot start/end with hyphen, cannot be all numeric." -ForegroundColor Red
+            $newName = $null
+        }
+    } while (-not $newName)
+
     Rename-Computer -NewName $newName -Force -ErrorAction Stop
     Write-Host "Server renamed to $newName. A reboot is required to apply the name change."
 
@@ -144,10 +167,16 @@ try {
     # ----------------------------
     Write-Host "`n=== Test Network Connectivity ===`n"
     try {
-        if (Test-Connection -ComputerName $Gateway -Count 2 -Quiet) {
-            Write-Host "Gateway $Gateway is reachable."
+        if ($setStatic -match '^[Yy]') {
+            $pingTarget = $Gateway
         } else {
-            Write-Warning "Cannot reach gateway $Gateway. Check network settings."
+            $pingTarget = "8.8.8.8"
+        }
+
+        if (Test-Connection -ComputerName $pingTarget -Count 2 -Quiet) {
+            Write-Host "$pingTarget is reachable."
+        } else {
+            Write-Warning "Cannot reach $pingTarget. Check network settings."
         }
     } catch {
         Write-Warning "Error testing connectivity: $_"
